@@ -16,7 +16,8 @@ class ProgressWidget(QWidget):
     cancel_requested = pyqtSignal()
     
     # Statuses that allow cancellation
-    ACTIVE_STATUSES = ["Encrypting", "Decrypting", "Exporting", "Compressing", "Cleaning", "Updating", "Scanning"]
+    # Statuses that allow cancellation (deletion-related statuses like "Cleaning" are excluded)
+    ACTIVE_STATUSES = ["Encrypting", "Decrypting", "Exporting", "Compressing", "Updating"]
     
     def __init__(self, parent=None):
         super().__init__(parent)

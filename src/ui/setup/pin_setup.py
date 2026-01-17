@@ -218,6 +218,8 @@ class PinVerifyDialog(QDialog):
         self.pin_input.setPlaceholderText(_("placeholder_enter_pin"))
         self.pin_input.returnPressed.connect(self._on_unlock)
         layout.addWidget(self.pin_input)
+
+        layout.addSpacing(2)
         
         # Error label
         self.error_label = QLabel("")
