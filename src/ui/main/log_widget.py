@@ -4,7 +4,7 @@ Real-time log display with color coding.
 """
 
 from PyQt6.QtWidgets import QPlainTextEdit
-from PyQt6.QtCore import pyqtSlot
+from PyQt6.QtCore import pyqtSlot, pyqtSignal
 from PyQt6.QtGui import QTextCharFormat, QColor, QFont
 
 from src.ui.styles import get_log_colors
@@ -14,10 +14,16 @@ from src.core.i18n import _
 class LogWidget(QPlainTextEdit):
     """Widget for displaying operation logs."""
     
+    # Signal to update UI from any thread safely
+    log_added = pyqtSignal(str, str, str)
+    
     def __init__(self, dark_mode: bool = True, parent=None):
         super().__init__(parent)
         self._dark_mode = dark_mode
         self._setup_ui()
+        
+        # Connect signal to slot
+        self.log_added.connect(self._on_log_added)
     
     def contextMenuEvent(self, event):
         """Show context menu on right click."""
@@ -47,15 +53,17 @@ class LogWidget(QPlainTextEdit):
         """Update dark mode setting."""
         self._dark_mode = dark_mode
     
-    @pyqtSlot(str, str, str)
     def add_log(self, timestamp: str, level: str, message: str):
         """
-        Add a log entry.
-        
-        Args:
-            timestamp: Time string (HH:MM:SS)
-            level: Log level (DEBUG, INFO, WARNING, ERROR)
-            message: Log message
+        Add a log entry (Thread-safe public method).
+        Emits signal to handle UI update on main thread.
+        """
+        self.log_added.emit(timestamp, level, message)
+
+    @pyqtSlot(str, str, str)
+    def _on_log_added(self, timestamp: str, level: str, message: str):
+        """
+        Actually update the UI (Main thread only).
         """
         colors = get_log_colors(self._dark_mode)
         color = colors.get(level, colors["INFO"])

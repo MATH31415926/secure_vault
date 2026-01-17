@@ -209,6 +209,36 @@ class SecureVaultApp:
 
 def main():
     """Application entry point."""
+    # Global exception handler
+    def exception_hook(exctype, value, tb):
+        import traceback
+        traceback_str = ''.join(traceback.format_exception(exctype, value, tb))
+        print(traceback_str)  # Print to console for dev
+        
+        # Log to file in case of crash
+        try:
+            with open("crash_dump.txt", "w", encoding="utf-8") as f:
+                f.write(traceback_str)
+        except Exception:
+            pass
+            
+        # Try to show error dialog if QApplication exists
+        try:
+            instance = QApplication.instance()
+            if instance:
+                QMessageBox.critical(
+                    None,
+                    "Critical Error",
+                    f"Application encountered a critical error and must close:\n{value}\n\nA crash_dump.txt has been created."
+                )
+        except Exception:
+            pass
+            
+        sys.__excepthook__(exctype, value, tb)
+        sys.exit(1)
+
+    sys.excepthook = exception_hook
+
     # Enable High DPI scaling
     os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "1"
     
