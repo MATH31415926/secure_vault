@@ -378,6 +378,10 @@ class MainWindow(QMainWindow):
         for i in range(header.count()):
             column_widths.append(header.sectionSize(i))
         
+        # Save sort state before reload
+        sort_column = header.sortIndicatorSection()
+        sort_order = header.sortIndicatorOrder()
+        
         def save_expanded(item):
             for row in range(item.rowCount()):
                 child = item.child(row)
@@ -409,6 +413,10 @@ class MainWindow(QMainWindow):
         for i, width in enumerate(column_widths):
             if i < header.count() and width > 0:
                 header.resizeSection(i, width)
+        
+        # Restore sort state
+        if sort_column >= 0 and sort_column < header.count():
+            self.tree_view.sortByColumn(sort_column, sort_order)
         
         # Cleanup orphaned blocks (ghost data)
         cleaned_bytes = self.repository.cleanup_orphaned_blocks()

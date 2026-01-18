@@ -9,10 +9,34 @@ from PyQt6.QtWidgets import (
     QTreeView, QAbstractItemView, QHeaderView
 )
 from PyQt6.QtCore import (
-    Qt, QModelIndex, pyqtSignal
+    Qt, QModelIndex, pyqtSignal, QSortFilterProxyModel
 )
 from PyQt6.QtGui import QStandardItemModel, QStandardItem, QDragEnterEvent, QDropEvent
 from PyQt6.QtWidgets import QFileIconProvider
+
+
+class FileSortProxyModel(QSortFilterProxyModel):
+    """Proxy model for proper numeric sorting of size and count columns."""
+    
+    def lessThan(self, left: QModelIndex, right: QModelIndex) -> bool:
+        """Compare two items for sorting."""
+        column = left.column()
+        
+        # For Size (column 2) and Count (column 3), use UserRole data (numeric values)
+        if column in (2, 3):
+            left_data = self.sourceModel().data(left, Qt.ItemDataRole.UserRole)
+            right_data = self.sourceModel().data(right, Qt.ItemDataRole.UserRole)
+            
+            # Handle None/missing values - treat them as -1 so they sort to top/bottom
+            if left_data is None:
+                left_data = -1
+            if right_data is None:
+                right_data = -1
+            
+            return left_data < right_data
+        
+        # For other columns, use default string comparison
+        return super().lessThan(left, right)
 
 from src.database.models import VirtualFile
 from src.core.crypto import decrypt_metadata
@@ -281,8 +305,12 @@ class FileTreeView(QTreeView):
     
     def setModel(self, model: FileTreeModel):
         """Set the model and configure header."""
-        super().setModel(model)
-        self._model = model
+        self._source_model = model
+        
+        # Use proxy model for proper sorting
+        self._proxy_model = FileSortProxyModel()
+        self._proxy_model.setSourceModel(model)
+        super().setModel(self._proxy_model)
         
         # Connect expanded signal for lazy loading
         self.expanded.connect(self._on_expanded)
@@ -317,8 +345,9 @@ class FileTreeView(QTreeView):
         target_parent_id = None
         
         if drop_index.isValid():
-            model = self.model()
-            vf = model.get_virtual_file_by_index(drop_index)
+            # Map proxy index to source index
+            source_drop_index = self._proxy_model.mapToSource(drop_index)
+            vf = self._source_model.get_virtual_file_by_index(source_drop_index)
             if vf:
                 if vf.is_directory:
                     target_parent_id = vf.id
@@ -344,8 +373,9 @@ class FileTreeView(QTreeView):
                 file_ids = set()
                 for idx in selected:
                     if idx.column() == 0:
-                        model = self.model()
-                        vf = model.get_virtual_file_by_index(idx)
+                        # Map proxy index to source index
+                        source_idx = self._proxy_model.mapToSource(idx)
+                        vf = self._source_model.get_virtual_file_by_index(source_idx)
                         if vf:
                             file_ids.add(vf.id)
                 
@@ -358,9 +388,11 @@ class FileTreeView(QTreeView):
         """Handle directory expansion - load children lazily."""
         if not index.isValid():
             return
-        item = self._model.itemFromIndex(index)
+        # Map proxy index to source index
+        source_index = self._proxy_model.mapToSource(index)
+        item = self._source_model.itemFromIndex(source_index)
         if item:
-            self._model.load_children(item)
+            self._source_model.load_children(item)
     
     def _on_context_menu(self, pos):
         """Handle context menu request."""
@@ -374,10 +406,11 @@ class FileTreeView(QTreeView):
         files = []
         seen_ids = set()
         
-        model = self.model()
         for idx in selected:
             if idx.column() == 0:  # Only process first column
-                vf = model.get_virtual_file_by_index(idx)
+                # Map proxy index to source index
+                source_idx = self._proxy_model.mapToSource(idx)
+                vf = self._source_model.get_virtual_file_by_index(source_idx)
                 if vf and vf.id not in seen_ids:
                     files.append(vf)
                     seen_ids.add(vf.id)
