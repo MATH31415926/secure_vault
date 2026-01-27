@@ -138,6 +138,7 @@ class MainWindow(QMainWindow):
                     QTimer.singleShot(1000, lambda o=op: self._resume_export(o))
                 elif op.type == 'delete':
                     QTimer.singleShot(1000, lambda o=op: self._resume_delete(o))
+            elif op.status == 'cancelling':
                 self.logger.info(_("log_resume_cleanup", type=op.type))
                 # For cleanup, we immediately start the background cleanup worker
                 self._start_background_cleanup(op)
@@ -1202,11 +1203,13 @@ class MainWindow(QMainWindow):
             else:
                 self._active_task = None
         
-        # Finally clear active task state
-        self._active_task = None
-        self._current_operation = None
-        self._current_importer = None
-        self._current_task_phase = 0
+        if not self._active_task == "cleanup":
+            # Finally clear active task state for non-cleanup tasks
+            # (Cleanup tasks clear their own state in _on_cleanup_finished)
+            self._active_task = None
+            self._current_operation = None
+            self._current_importer = None
+            self._current_task_phase = 0
     
     def _worker_ref_callback(self):
         """Helper to get cancellation status from current worker."""
@@ -1306,8 +1309,20 @@ class MainWindow(QMainWindow):
         self._load_files()
         self._update_capacity()
 
-    def _cleanup_current_task(self, cleanup_success=False):
-        """Synchronous cleanup for successful tasks."""
+    def _cleanup_current_task(self, cleanup_success=False, is_exit=False):
+        """
+        Synchronous cleanup for successful tasks.
+        
+        Args:
+            cleanup_success: If True, delete the operation record.
+            is_exit: If True, keep the record for resumption but clear UI state.
+        """
+        if is_exit:
+            # Just clear UI pointer, record stays in DB for resumption
+            self._active_task = None
+            self._current_operation = None
+            return
+
         op = getattr(self, '_current_operation', None)
         if cleanup_success and op:
             try:
