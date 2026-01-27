@@ -525,7 +525,6 @@ class Block:
                 )
             
             # Find those that reach zero
-            # SQLite specific: using IN with placeholder for batch
             placeholders = ",".join(["?"] * len(block_ids))
             rows = db.fetchall(
                 f"SELECT * FROM blocks WHERE id IN ({placeholders}) AND reference_count <= 0",
@@ -535,6 +534,18 @@ class Block:
             for row in rows:
                 blocks_to_delete.append(cls._from_row(row))
             
+            # Remove from disk if possible (IO during transaction is slightly risky but ensures DB alignment)
+            # Actually, better to do it before final DB deletion so if DB fails, files might remain
+            # but if files fail, we might want to know.
+            blocks_dir = db.blocks_path
+            for block in blocks_to_delete:
+                try:
+                    full_path = blocks_dir / block.relative_path
+                    if full_path.exists():
+                        full_path.unlink()
+                except Exception:
+                    pass
+
             # Remove from database those that reach zero
             if blocks_to_delete:
                 db.execute(
@@ -648,6 +659,7 @@ class Operation:
     parent_id: Optional[int] = None
     total_size: int = 0
     processed_size: int = 0
+    metadata: Optional[str] = None # JSON metadata
     error_message: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -667,10 +679,10 @@ class Operation:
             cursor = db.execute(
                 """
                 INSERT INTO operations 
-                (type, status, source_paths, target_path, parent_id, total_size)
-                VALUES (?, ?, ?, ?, ?, ?)
+                (type, status, source_paths, target_path, parent_id, total_size, metadata)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (type, 'processing', json.dumps(source_paths), str(target_path) if target_path else None, parent_id, total_size)
+                (type, 'processing', json.dumps(source_paths), str(target_path) if target_path else None, parent_id, total_size, None)
             )
             op_id = cursor.lastrowid
         
@@ -724,10 +736,19 @@ class Operation:
             parent_id=row["parent_id"],
             total_size=row["total_size"],
             processed_size=row["processed_size"],
+            metadata=row["metadata"],
             error_message=row["error_message"],
             created_at=row["created_at"],
             updated_at=row["updated_at"]
         )
+
+    def update_metadata(self, repo_path: str, metadata: str) -> None:
+        db = get_repository_database(repo_path)
+        db.execute(
+            "UPDATE operations SET metadata = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (metadata, self.id)
+        )
+        self.metadata = metadata
 
     def delete(self, repo_path: str) -> None:
         if self.id is None:

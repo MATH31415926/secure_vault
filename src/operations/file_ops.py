@@ -205,6 +205,17 @@ class FileImporter:
                 
         self.progress_tracker = ProgressTracker(unified_callback)
         self._created_file_ids: list[int] = []  # Track created files for rollback
+        
+        # RESUMPTION: Load previously created file IDs if any
+        if self.operation and self.operation.metadata:
+            try:
+                import json
+                meta = json.loads(self.operation.metadata)
+                if isinstance(meta, dict) and "created_file_ids" in meta:
+                    self._created_file_ids = meta["created_file_ids"]
+                    self.logger.info(f"Loaded {len(self._created_file_ids)} previously created file IDs for {self.operation.id}")
+            except Exception as e:
+                self.logger.error(f"Failed to load operation metadata: {e}")
 
     def set_total_bytes(self, total_bytes: int):
         """Set total bytes for the current import session."""
@@ -287,6 +298,11 @@ class FileImporter:
         # Track created file immediately for rollback
         if virtual_file.id not in self._created_file_ids:
             self._created_file_ids.append(virtual_file.id)
+            # Sync with operation metadata for resumption
+            if self.operation:
+                import json
+                meta = {"created_file_ids": self._created_file_ids}
+                self.operation.update_metadata(self.repository.path, json.dumps(meta))
         
         self.logger.debug(f"Starting/Resuming import: {file_path.name} ({file_size} bytes) -> ID: {virtual_file.id}")
         
@@ -430,6 +446,11 @@ class FileImporter:
         # Track created directory for rollback
         if virtual_dir.id not in self._created_file_ids:
             self._created_file_ids.append(virtual_dir.id)
+            # Sync with operation metadata for resumption
+            if self.operation:
+                import json
+                meta = {"created_file_ids": self._created_file_ids}
+                self.operation.update_metadata(self.repository.path, json.dumps(meta))
         
         # Import contents
         for item in folder_path.iterdir():

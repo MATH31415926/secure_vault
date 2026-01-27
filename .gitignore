@@ -2,3 +2,8 @@
 .idea/
 __pycache__/
 *.pyc
+dist/
+build/
+*.spec
+*.iss
+Output/

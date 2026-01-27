@@ -138,9 +138,9 @@ class MainWindow(QMainWindow):
                     QTimer.singleShot(1000, lambda o=op: self._resume_export(o))
                 elif op.type == 'delete':
                     QTimer.singleShot(1000, lambda o=op: self._resume_delete(o))
-            elif op.status == 'cancelling':
                 self.logger.info(_("log_resume_cleanup", type=op.type))
-                QTimer.singleShot(1000, lambda o=op: self._resume_cleanup(o))
+                # For cleanup, we immediately start the background cleanup worker
+                self._start_background_cleanup(op)
 
     def _resume_import(self, op):
         """Resume import with path validation."""
@@ -221,12 +221,9 @@ class MainWindow(QMainWindow):
             op.update_status(self.repository.path, 'failed', str(e))
 
     def _resume_cleanup(self, op):
-        # Implementation for resuming cleanup
+        """Resume a stuck cleanup task."""
         self.logger.info(_("log_force_cleanup", id=op.id))
-        self._active_task = op.type
-        self._current_operation = op
-        # Perform rollback/deletion since we are resuming a cancelled/broken task
-        self._cleanup_current_task(cleanup_success=False)
+        self._start_background_cleanup(op)
 
     def _setup_window(self):
         """Setup window properties."""
@@ -1184,37 +1181,26 @@ class MainWindow(QMainWindow):
             # Log success message
             self.logger.operation_end(log_action, _("msg_items_count", count=len(log_items)) if log_items else success_msg)
             
-            # Log each item if provided
-            if log_items and log_action:
-                for item in log_items:
-                    self.logger.debug(_("log_item_finished", action=log_action, item=item))
-            
             # Synchronized cleanup for successful task (removes DB record)
             self._cleanup_current_task(cleanup_success=True)
             
             self._load_files()
             self._update_capacity()
-            
-            # Open directory if requested
-            if open_dir:
-                try:
-                    os.startfile(open_dir)
-                except Exception:
-                    pass
-        elif message == "__CANCELLED__":
-            self.progress_widget.set_complete(_("msg_cancelled"))
-            self.log_widget.add_info(_("log_cancelled_by_user"))
-            # Synchronized cleanup for cancelled task (performs rollback/deletion)
-            self._cleanup_current_task(cleanup_success=False)
-            self._load_files()
-            self._update_capacity()
+        elif message == "__CANCELLED__" or message == "__FAILED__":
+            self.progress_widget.set_status(_("status_cancelling")) # Keep progress widget active
+            # Perform background cleanup instead of sync
+            if self._current_operation:
+                self._start_background_cleanup(self._current_operation)
+            else:
+                self._active_task = None # Fail safe
         else:
             self.progress_widget.set_error(message)
             self.logger.error(message)
-            # Synchronized cleanup for failed task (performs rollback/deletion)
-            self._cleanup_current_task(cleanup_success=False)
-            self._load_files()
-            self._update_capacity()
+            # Failures also trigger cleanup
+            if self._current_operation:
+                self._start_background_cleanup(self._current_operation)
+            else:
+                self._active_task = None
         
         # Finally clear active task state
         self._active_task = None
@@ -1240,58 +1226,58 @@ class MainWindow(QMainWindow):
             self._worker.cancel()
             self.progress_widget.set_status(_("status_cancelling")) # Update UI feedback
     
-    def _cleanup_current_task(self, cleanup_success=False, is_exit=False):
-        """
-        Clean up resources based on current active task type.
+    def _start_background_cleanup(self, op: Operation):
+        """Start background cleanup for a cancelled or failed operation."""
+        self._active_task = "cleanup"
+        self._current_operation = op
+        self.progress_widget.set_status(_("status_cleaning"))
         
-        Args:
-            cleanup_success: If True, only delete the operation record.
-                            If False, perform full rollback (delete partial files).
-            is_exit: If True, keep the record for resumption.
-        """
-        if not self._active_task:
-            return
-        
-        op = getattr(self, '_current_operation', None)
-        
-        # 1. Exit handling (No deletion, just pause)
-        if is_exit:
-            if op:
-                self.logger.info(_("log_pause_on_exit"))
-                # Status remains 'processing' in DB
-            return
-
-        # 2. Failure/Cancellation Rollback
-        if not cleanup_success:
-            if self._active_task in ("encrypt", "import"):
-                # Rollback importer (deletes created virtual files and blocks)
-                if hasattr(self, '_current_importer') and self._current_importer:
-                    try:
-                        fids = self._current_importer._created_file_ids
-                        if fids:
-                            self.logger.info(_("log_rollback_files", count=len(fids)))
-                            from src.database.models import FileBlockMapping, Block, VirtualFile
-                            # Use new batch methods for extreme performance
-                            bids = FileBlockMapping.remove_mappings_for_files_batch(fids, self.repository.path)
-                            if bids:
-                                Block.decrement_batch(bids, self.repository.path)
-                            VirtualFile.delete_batch(fids, self.repository.path)
-                    except Exception as e:
-                        self.logger.error(f"Import rollback failed: {e}")
+        def do_cleanup():
+            # 1. Update status to cancelling
+            op.update_status(self.repository.path, 'cancelling')
             
-            elif self._active_task in ("decrypt_export", "export"):
-                # Delete partially exported files
-                if op and op.target_path:
+            # 2. Perform based on type
+            if op.type == 'import':
+                # Rollback importer (metadata cleanup)
+                from src.database.models import FileBlockMapping, Block, VirtualFile
+                
+                # Load created IDs from metadata if provided
+                fids = []
+                if op.metadata:
+                    try:
+                        meta = json.loads(op.metadata)
+                        fids = meta.get("created_file_ids", [])
+                    except: pass
+                
+                if not fids:
+                    # Fallback to search if metadata lost? 
+                    # Usually metadata is reliable now.
+                    pass
+                
+                if fids:
+                    self.logger.info(_("log_rollback_files", count=len(fids)))
+                    total = len(fids)
+                    for i, fid in enumerate(fids):
+                        # Progress reporting
+                        self._worker.progress.emit(i, total, f"{_('status_cleaning')}: {i}/{total}", "", "")
+                        
+                        bids = FileBlockMapping.remove_mappings_for_files_batch([fid], self.repository.path)
+                        if bids:
+                            Block.decrement_batch(bids, self.repository.path)
+                        VirtualFile.delete_batch([fid], self.repository.path)
+            
+            elif op.type == 'export':
+                if op.target_path:
                     try:
                         target_dir = Path(op.target_path)
                         source_ids = json.loads(op.source_paths)
-                        self.logger.info(_("log_cleanup_files", count=len(source_ids)))
+                        total = len(source_ids)
                         
-                        # Optimization: Get all metadata in batch to avoid O(N) queries
                         from src.database.models import VirtualFile
                         vfs = VirtualFile.get_batch(source_ids, self.repository.path)
                         
-                        for vf in vfs:
+                        for i, vf in enumerate(vfs):
+                            self._worker.progress.emit(i, total, f"{_('status_cleaning')}: {i}/{total}", "", "")
                             name = decrypt_metadata(vf.name_encrypted, self.master_key, vf.name_nonce)
                             target_file = target_dir / name
                             if target_file.exists():
@@ -1302,18 +1288,33 @@ class MainWindow(QMainWindow):
                     except Exception as e:
                         self.logger.error(f"Export cleanup failed: {e}")
 
-        if op:
+            # 3. Finalize
+            op.delete(self.repository.path)
+            return None
+
+        # Reuse WorkerThread for cleanup
+        self._worker = WorkerThread(do_cleanup)
+        self._worker.progress.connect(self._on_progress_update)
+        self._worker.finished.connect(self._on_cleanup_finished)
+        self._worker.start()
+
+    def _on_cleanup_finished(self, success, msg):
+        """Finalize state after background cleanup."""
+        self._active_task = None
+        self._current_operation = None
+        self.progress_widget.set_complete(_("msg_cleanup_finished") if success else _("error_cleanup_failed"))
+        self._load_files()
+        self._update_capacity()
+
+    def _cleanup_current_task(self, cleanup_success=False):
+        """Synchronous cleanup for successful tasks."""
+        op = getattr(self, '_current_operation', None)
+        if cleanup_success and op:
             try:
                 op.delete(self.repository.path)
-                self.logger.info(_("log_cleanup_finished"))
-                self._current_operation = None
-            except Exception as e:
-                self.logger.debug(f"Op record deletion failed (might be already deleted): {e}")
-                
-        # Clear active state after cleanup unless exiting
+            except Exception: pass
         self._active_task = None
-        self._current_task_phase = 0
-        self.logger.info(_("log_cleanup_finished"))
+        self._current_operation = None
     
     def _can_start_task(self, task_name: str) -> bool:
         """Check if a new task can be started (mutual exclusion).

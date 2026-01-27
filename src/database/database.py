@@ -166,6 +166,7 @@ class RepositoryDatabase:
             parent_id INTEGER, -- For imports
             total_size INTEGER DEFAULT 0,
             processed_size INTEGER DEFAULT 0,
+            metadata TEXT, -- JSON metadata for task resumption/cleanup
             error_message TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -177,6 +178,10 @@ class RepositoryDatabase:
         CREATE INDEX IF NOT EXISTS idx_file_blocks_file ON file_blocks(file_id);
         """
         self._connection.executescript(schema)
+        try:
+            self._connection.execute("ALTER TABLE operations ADD COLUMN metadata TEXT")
+        except:
+            pass
         self._connection.commit()
 
 
