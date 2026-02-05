@@ -242,10 +242,17 @@ class GlobalDatabase:
             name TEXT NOT NULL UNIQUE,
             path TEXT NOT NULL UNIQUE,
             max_capacity INTEGER NOT NULL,
+            version TEXT DEFAULT '1.0.0',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         """
         self._connection.executescript(schema)
+        # Migration: Add version column if it doesn't exist
+        try:
+            self._connection.execute("ALTER TABLE repositories ADD COLUMN version TEXT DEFAULT '1.0.0'")
+        except sqlite3.OperationalError:
+            # Column already exists
+            pass
         self._connection.commit()
 
 

@@ -18,20 +18,21 @@ class Repository:
     name: str
     path: str
     max_capacity: int
+    version: str = "1.0.0"
     created_at: Optional[datetime] = None
     
     @classmethod
-    def create(cls, name: str, path: str, max_capacity: int) -> "Repository":
+    def create(cls, name: str, path: str, max_capacity: int, version: str = "1.0.0") -> "Repository":
         """Create a new repository."""
         db = get_global_database()
         cursor = db.execute(
-            "INSERT INTO repositories (name, path, max_capacity) VALUES (?, ?, ?)",
-            (name, path, max_capacity)
+            "INSERT INTO repositories (name, path, max_capacity, version) VALUES (?, ?, ?, ?)",
+            (name, path, max_capacity, version)
         )
         db._connection.commit()
         repo_id = cursor.lastrowid
         
-        return cls(id=repo_id, name=name, path=path, max_capacity=max_capacity)
+        return cls(id=repo_id, name=name, path=path, max_capacity=max_capacity, version=version)
     
     @classmethod
     def get_by_id(cls, repo_id: int) -> Optional["Repository"]:
@@ -47,6 +48,7 @@ class Repository:
                 name=row["name"],
                 path=row["path"],
                 max_capacity=row["max_capacity"],
+                version=row["version"] if "version" in row.keys() else "1.0.0",
                 created_at=row["created_at"]
             )
         return None
@@ -65,6 +67,7 @@ class Repository:
                 name=row["name"],
                 path=row["path"],
                 max_capacity=row["max_capacity"],
+                version=row["version"] if "version" in row.keys() else "1.0.0",
                 created_at=row["created_at"]
             )
         return None
@@ -80,6 +83,7 @@ class Repository:
                 name=row["name"],
                 path=row["path"],
                 max_capacity=row["max_capacity"],
+                version=row["version"] if "version" in row.keys() else "1.0.0",
                 created_at=row["created_at"]
             )
             for row in rows

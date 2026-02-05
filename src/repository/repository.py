@@ -150,7 +150,7 @@ def create_repository(name: str, path: str, max_capacity: int, master_key: bytes
     repo_db.close()
     
     # Create repository in global database
-    repo = Repository.create(name, path, max_capacity)
+    repo = Repository.create(name, path, max_capacity, version="1.0.0")
     
     # Generate config file with key hash
     key_hash = compute_key_hash(master_key)
@@ -170,7 +170,7 @@ def save_repository_config(repo: Repository, master_key_hash: str = None) -> Non
     config_data = {
         "name": repo.name,
         "max_capacity": repo.max_capacity,
-        "version": "1.0"
+        "version": repo.version
     }
     
     if master_key_hash:
@@ -282,7 +282,12 @@ def import_repository(config_path: str, master_key: bytes) -> tuple:
     was_renamed = final_name != original_name
     
     # Register in global database
-    repo = Repository.create(final_name, repo_path, config["max_capacity"])
+    repo = Repository.create(
+        final_name, 
+        repo_path, 
+        config["max_capacity"], 
+        version=config.get("version", "1.0.0")
+    )
     
     # Update config with correct path and preserve key hash for security
     current_key_hash = compute_key_hash(master_key)
